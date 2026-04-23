@@ -1,9 +1,9 @@
-"""Tests for sentinel.ml_logic.scoring."""
+"""Tests for sentinel.ml_logic.scorer."""
 import numpy as np
 import pytest
 from sklearn.decomposition import PCA
 
-from sentinel.ml_logic.scoring import (
+from sentinel.ml_logic.scorer import (
     broadcast_window_scores_to_rows,
     score_report,
     score_windows,

@@ -31,7 +31,7 @@ from ..params import WINDOW_SIZE
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Internal helpers
+# INTENAL HELPERS
 # ──────────────────────────────────────────────────────────────────────────────
 
 def _is_pca(model) -> bool:
@@ -58,12 +58,9 @@ def _reconstruct_windows(
     X_win : (n_win, win, n_feat) float32 — the input windows
     X_hat : (n_win, win, n_feat) float32 — the reconstructions
 
-    If fewer than one full window fits, returns two empty arrays of shape
-    ``(0, win, n_feat)`` and does NOT dispatch to the model (matches the
-    previous short-input behaviour of ``score_windows``).
+    If fewer than one full window fits, returns two empty arrays of shape*
+    ``(0, win, n_feat)`` and does NOT dispatch to the model.
 
-    The PCA check comes first so a future Keras model that happens to expose
-    ``transform``/``inverse_transform`` does not get mis-routed.
     """
     X_rows = np.asarray(X_rows, dtype=np.float32)
     N, n_feat = X_rows.shape
@@ -75,11 +72,16 @@ def _reconstruct_windows(
 
     X_win = X_rows[:n_complete * win].reshape(n_complete, win, n_feat)
 
+    # PCA -> inverse_transform() on flattened windows---------------------------
     if _is_pca(model):
+        # flatten
         X_flat = X_win.reshape(n_complete, win * n_feat)
+        # reconstruct and reshape back
         X_hat  = model.inverse_transform(model.transform(X_flat)).reshape(
             n_complete, win, n_feat
         )
+
+    # Keras -> predict() in batches on 3D windows-------------------------------
     elif _is_keras(model):
         X_hat = model.predict(X_win, batch_size=batch, verbose=0)
         if X_hat.shape != X_win.shape:
@@ -92,6 +94,7 @@ def _reconstruct_windows(
             f"(transform + inverse_transform) or predict()"
         )
 
+    # X_win & X_hat reconstructions
     return X_win, np.asarray(X_hat, dtype=np.float32)
 
 
@@ -100,7 +103,7 @@ def _window_scores_from_sq_err(
     topk: int | None,
 ) -> np.ndarray:
     """
-    Reduce per-window squared errors to one number per window.
+    Reduce per-window squared errors to one MSE per window.
 
     Parameters
     ----------
@@ -122,15 +125,11 @@ def _window_scores_from_sq_err(
     if not 1 <= topk <= n_feat:
         raise ValueError(f"topk must be in [1, {n_feat}], got {topk}")
 
-    # LSTM/CNN failure mode: only a few channels show high MSE, so take the mean of the top-k per-channel MSEs
+    # topk in LSTM/CNN: only a few channels show high MSE, so take the mean of the top-k per-channel MSEs
     per_channel = sq_err.mean(axis=1)                        # (n_win, n_feat)
     vals = np.partition(per_channel, -topk, axis=1)[:, -topk:]
     return vals.mean(axis=1).astype(np.float32)
 
-
-# ──────────────────────────────────────────────────────────────────────────────
-# Broadcast helper
-# ──────────────────────────────────────────────────────────────────────────────
 
 def broadcast_window_scores_to_rows(
     win_scores: np.ndarray,
@@ -158,7 +157,7 @@ def broadcast_window_scores_to_rows(
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Public scoring functions
+# MAIN public scoring functions
 # ──────────────────────────────────────────────────────────────────────────────
 
 def score_windows(
@@ -173,29 +172,40 @@ def score_windows(
 
     Parameters
     ----------
-    model   : fitted reconstruction model (PCA or Keras — see module docstring)
+    model   : fitted reconstruction model (PCA or Keras)
     X_rows  : float32 (n_rows, n_features)
     win     : window size
     batch   : Keras batch size
-    topk    : if set, each window's score is the mean of its ``topk`` largest
+    topk    : if set, each window's score is the mean of itstopk largest
               per-channel MSE values instead of the mean over all channels.
-              Useful when anomalies affect only a few channels (LSTM/CNN
-              failure mode in NB 12/13). Note: under ``topk`` the returned
-              array is no longer a mean MSE — it is the mean of the top-k
-              per-channel MSEs, broadcast to rows.
+              Useful when anomalies affect only a few channels (LSTM/CNN).
+              Note: under topk the returned array is no longer a
+              overall MSE — it is the mean of the top-k per-channel MSEs,
+              broadcast to rows.
 
     Returns
     -------
     float32 (n_rows,) — per-row anomaly score (window statistic broadcast)
     """
     X_rows = np.asarray(X_rows, dtype=np.float32)
+
+    # reconstraction
     X_win, X_hat = _reconstruct_windows(model, X_rows, win=win, batch=batch)
     if X_win.shape[0] == 0:
         return np.zeros(X_rows.shape[0], dtype=np.float32)
+
+    # error
     sq_err = (X_win - X_hat) ** 2
+
+    # calculates MSE pro window for all or topk chanels (LSTM/CNN)
     win_scores = _window_scores_from_sq_err(sq_err, topk=topk)
+
+    # broadcast window scores to rows
     return broadcast_window_scores_to_rows(win_scores, X_rows.shape[0], win)
 
+# ──────────────────────────────────────────────────────────────────────────────
+# WIP: more detailed report for the showcase
+# ──────────────────────────────────────────────────────────────────────────────
 
 def window_scores_only(
     model,
